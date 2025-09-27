@@ -610,11 +610,21 @@ def process_journal_data(df_journal, workbook, test_file=None):
     except Exception as e:
         print(f"读取余额表1时出错: {str(e)}，使用默认顺序")
     
-    # 使用排序后的科目编码，并确保顺序严格按照余额表1中F列的顺序
+    # 按照科目编码从小到大排序
+    try:
+        # 尝试将科目编码转换为数字进行排序
+        sorted_codes = sorted(unique_codes, key=lambda x: float(str(x).strip()) if str(x).strip().replace('.', '', 1).isdigit() else str(x).strip())
+    except:
+        # 如果转换失败，使用字符串排序
+        sorted_codes = sorted(unique_codes, key=lambda x: str(x).strip())
+    
+    print(f"已按照科目编码从小到大排序: {sorted_codes}")
     unique_codes = sorted_codes
     
     # 保存创建的工作表名称列表，用于最终调整顺序
     created_sheets = []
+    # 保存科目编码和工作表名称的映射，用于最终排序
+    code_sheet_mapping = []
     
     # 找到模板工作表
     original_sheet = None
@@ -810,6 +820,8 @@ def process_journal_data(df_journal, workbook, test_file=None):
         
         # 记录创建的工作表名称
         created_sheets.append(sheet_name)
+        # 记录科目编码和工作表名称的映射
+        code_sheet_mapping.append((code_str, sheet_name))
         
         # 首先，如果有原始表格副本，完整复制其格式到新工作表
         if original_sheet:
@@ -895,7 +907,8 @@ def process_journal_data(df_journal, workbook, test_file=None):
         fill_data(new_sheet, result, df_journal)
     
     # 返回创建的工作表列表
-    return created_sheets
+    # 返回创建的工作表名称列表和科目编码与工作表名称的映射
+    return created_sheets, code_sheet_mapping
 
 def get_valid_sheet_name(name, workbook, max_length=31):
     """获取有效的工作表名称"""
@@ -1789,13 +1802,51 @@ def test_copy_table():
                 return
             
             # 调用process_journal_data函数处理序时账数据并获取创建的工作表列表
-            created_sheets = process_journal_data(df_journal, wb_output, test_file)
+            created_sheets, code_sheet_mapping = process_journal_data(df_journal, wb_output, test_file)
             
             # 删除原始表格副本工作表
             remove_original_copy_sheet(wb_output)
             
-            # 保持原始工作表顺序，不进行特殊排序
-            print("保持原始工作表顺序")
+            # 按照余额表1的F列科目名称顺序排序调整工作表顺序
+            try:
+                # 创建一个排序后的工作表名称列表
+                sorted_sheets = []
+                # 先添加原始工作表
+                for sheet_name in wb_output.sheetnames:
+                    if sheet_name not in created_sheets:
+                        sorted_sheets.append(sheet_name)
+                
+                # 然后添加按余额表1科目名称排序的新工作表
+                from check_balance_sheet import get_account_sorting
+                sorted_names = get_account_sorting()
+                
+                # 创建工作表名称到余额表位置的映射
+                sheet_to_balance_position = {}
+                for code, sheet_name in code_sheet_mapping:
+                    # 查找工作表名称在余额表1中的位置
+                    found = False
+                    for i, balance_name in enumerate(sorted_names):
+                        if balance_name in sheet_name or sheet_name in balance_name:
+                            sheet_to_balance_position[sheet_name] = i
+                            found = True
+                            break
+                    if not found:
+                        sheet_to_balance_position[sheet_name] = float('inf')
+                
+                # 按照余额表1的顺序排序工作表
+                sorted_sheets_by_balance = sorted(code_sheet_mapping, key=lambda x: sheet_to_balance_position.get(x[1], float('inf')))
+                
+                # 添加排序后的工作表名称
+                for code, sheet_name in sorted_sheets_by_balance:
+                    sorted_sheets.append(sheet_name)
+                
+                # 调整工作簿中的工作表顺序
+                if hasattr(wb_output, '_sheets'):
+                    wb_output._sheets = [wb_output[sheet] for sheet in sorted_sheets]
+                print("新增的工作表已按余额表1科目名称顺序排序")
+                print(f"排序后的工作表顺序: {sorted_sheets}")
+            except Exception as e:
+                print(f"调整工作表顺序时出错: {str(e)}")
         
             # 保存输出文件
             wb_output.save(output_file)
@@ -1891,13 +1942,80 @@ def test_copy_table():
                 return
             
             # 调用process_journal_data函数处理序时账数据并获取创建的工作表列表
-            created_sheets = process_journal_data(df_journal, wb_output)
+            created_sheets, code_sheet_mapping = process_journal_data(df_journal, wb_output)
             
             # 删除原始表格副本工作表
             remove_original_copy_sheet(wb_output)
             
-            # 保持原始工作表顺序，不进行特殊排序
-            print("保持原始工作表顺序")
+            # 按照科目编码从小到大排序调整工作表顺序
+            try:
+                # 创建一个排序后的工作表名称列表
+                sorted_sheets = []
+                # 先添加原始工作表
+                for sheet_name in wb_output.sheetnames:
+                    if sheet_name not in created_sheets:
+                        sorted_sheets.append(sheet_name)
+                
+                # 然后添加按科目编码排序的新工作表
+                # 先按科目编码排序code_sheet_mapping - 这里使用从余额表1获取的顺序
+                # 创建科目编码到工作表名称的映射字典
+                code_to_sheet = {code: sheet_name for code, sheet_name in code_sheet_mapping}
+                
+                # 从余额表1获取科目名称顺序
+                try:
+                    # 调用get_account_sorting函数获取科目名称排序
+                    from check_balance_sheet import get_account_sorting
+                    sorted_names = get_account_sorting()
+                    print(f"从余额表1获取的科目名称顺序（前10个）: {sorted_names[:10]}")
+                    
+                    # 创建工作表名称到余额表位置的映射
+                    sheet_to_balance_position = {}
+                    
+                    # 遍历所有工作表名称，尝试找到对应的余额表科目名称
+                    for code, sheet_name in code_sheet_mapping:
+                        # 查找工作表名称在余额表1中的位置
+                        for i, balance_name in enumerate(sorted_names):
+                            if balance_name in sheet_name or sheet_name in balance_name:
+                                sheet_to_balance_position[sheet_name] = i
+                                break
+                        # 如果没有找到匹配，使用一个大值表示排在后面
+                        if sheet_name not in sheet_to_balance_position:
+                            sheet_to_balance_position[sheet_name] = float('inf')
+                    
+                    # 打印匹配结果
+                    print("\n工作表名称与余额表位置的匹配结果:")
+                    for sheet_name, position in sheet_to_balance_position.items():
+                        matched_name = None
+                        if position < float('inf'):
+                            matched_name = sorted_names[position]
+                        print(f"{sheet_name}: 余额表位置 = {position}, 匹配的科目名称 = {matched_name if matched_name else '未匹配'}")
+                    
+                    # 按照余额表1的顺序排序工作表
+                    sorted_sheets_by_balance = sorted(code_sheet_mapping, key=lambda x: sheet_to_balance_position.get(x[1], float('inf')))
+                    
+                    # 将排序后的工作表名称添加到结果列表中
+                    for code, sheet_name in sorted_sheets_by_balance:
+                        sorted_sheets.append(sheet_name)
+                    
+                    # 打印最终排序结果
+                    print("\n最终排序后的工作表顺序:")
+                    for i, sheet_name in enumerate(sorted_sheets, 1):
+                        print(f"{i}. {sheet_name}")
+                    
+                except Exception as e:
+                    print(f"获取余额表排序信息时出错: {str(e)}")
+                    # 退回到按科目编码数值排序
+                    sorted_code_sheets = sorted(code_sheet_mapping, key=lambda x: float(x[0].strip()) if x[0].strip().replace('.', '', 1).isdigit() else x[0].strip())
+                    for code, sheet_name in sorted_code_sheets:
+                        sorted_sheets.append(sheet_name)
+                
+                # 调整工作簿中的工作表顺序
+                if hasattr(wb_output, '_sheets'):
+                    wb_output._sheets = [wb_output[sheet] for sheet in sorted_sheets]
+                print("新增的工作表已按余额表科目顺序排序")
+                print(f"排序后的工作表顺序: {sorted_sheets}")
+            except Exception as e:
+                print(f"调整工作表顺序时出错: {str(e)}")
             
             # 保存输出文件
             wb_output.save(output_file)
