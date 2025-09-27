@@ -143,7 +143,8 @@ def test_copy_table():
         copy_original_table(test_file, wb_output)
         
         # 分析、筛选和校验序时账数据
-        process_journal_data(df_journal, wb_output)
+        print(f"即将调用process_journal_data，test_file值: {test_file}")
+        process_journal_data(df_journal, wb_output, test_file)
         
         # 保存处理后的文件
         try:
@@ -347,8 +348,9 @@ def copy_original_table(input_file, workbook):
         except Exception as e:
             print(f"复制模板工作表时出错: {str(e)}")
 
-def process_journal_data(df_journal, workbook):
-    """处理序时账数据，创建科目代码工作表，保留原始模板格式"""
+def process_journal_data(df_journal, workbook, test_file=None):
+    """处理序时账数据，创建科目代码工作表，保留原始模板格式，返回创建的工作表列表"""
+    print(f"函数内部收到的test_file参数值: {test_file}")
     # 打印列信息以便调试
     print("\n--- 序时账列信息 ---\n")
     for i, col in enumerate(df_journal.columns):
@@ -454,6 +456,166 @@ def process_journal_data(df_journal, workbook):
     unique_codes = df_journal[code_column].unique()
     print(f"找到 {len(unique_codes)} 个不同的科目编码")
     
+    # 尝试从余额表1获取科目编码排序信息
+    sorted_codes = list(unique_codes)
+    print("开始处理余额表1排序逻辑...")
+    print(f"test_file参数值: {test_file}")
+    
+    # 存储科目编码和名称的映射关系
+    code_to_name = {}
+    
+    try:
+        if test_file:
+            print("test_file存在，尝试从余额表1获取科目编码排序信息...")
+            # 读取余额表1
+            balance_sheet_df = None
+            
+            # 根据文件类型选择不同的读取方式
+            file_ext = os.path.splitext(test_file)[1].lower()
+            print(f"文件类型: {file_ext}")
+            if file_ext == '.xls':
+                import xlrd
+                print("处理.xls文件")
+                try:
+                    book = xlrd.open_workbook(test_file)
+                    print(f".xls文件工作表列表: {book.sheet_names()}")
+                    if "余额表1" in book.sheet_names():
+                        sheet = book.sheet_by_name("余额表1")
+                        # 获取表头
+                        headers = [sheet.cell_value(0, col_idx) for col_idx in range(sheet.ncols)]
+                        # 创建DataFrame
+                        data = []
+                        for row_idx in range(1, sheet.nrows):  # 跳过第一行
+                            row_data = []
+                            for col_idx in range(sheet.ncols):
+                                row_data.append(sheet.cell_value(row_idx, col_idx))
+                            data.append(row_data)
+                        balance_sheet_df = pd.DataFrame(data, columns=headers)
+                    else:
+                        print("文件中未找到余额表1工作表")
+                except Exception as e:
+                    print(f"打开.xls文件出错: {str(e)}")
+            else:
+                # 处理.xlsx文件
+                print("处理.xlsx文件")
+                try:
+                    xl = pd.ExcelFile(test_file)
+                    print(f".xlsx文件工作表列表: {xl.sheet_names}")
+                    if "余额表1" in xl.sheet_names:
+                        balance_sheet_df = xl.parse("余额表1")
+                    else:
+                        print("文件中未找到余额表1工作表")
+                except Exception as e:
+                    print(f"打开.xlsx文件出错: {str(e)}")
+            
+            # 如果成功读取到余额表1
+            if balance_sheet_df is not None:
+                print(f"成功读取余额表1，共{len(balance_sheet_df)}行数据")
+                print(f"余额表1列名: {list(balance_sheet_df.columns)}")
+                
+                # 尝试找到科目编码列和科目名称列
+                code_columns = ['科目编码', '科目代码', '代码', '编码']
+                name_columns = ['科目名称', '科目', '名称']
+                
+                balance_code_column = None
+                balance_name_column = None
+                
+                # 查找科目编码列
+                for col in balance_sheet_df.columns:
+                    if any(keyword in col for keyword in code_columns):
+                        balance_code_column = col
+                        break
+                
+                # 查找科目名称列
+                for col in balance_sheet_df.columns:
+                    if any(keyword in col for keyword in name_columns):
+                        balance_name_column = col
+                        break
+                
+                # 如果同时找到科目编码列和科目名称列
+                if balance_code_column and balance_name_column:
+                    print(f"在余额表1中找到科目编码列: '{balance_code_column}'")
+                    print(f"在余额表1中找到科目名称列: '{balance_name_column}'")
+                    
+                    # 获取余额表1中的科目编码和名称映射（严格按照F列从上到下的顺序，从F2开始）
+                    code_name_pairs = []
+                    for idx, row in balance_sheet_df.iterrows():
+                        # 从第二行开始（F2对应DataFrame的索引1）
+                        if idx >= 0:  # DataFrame索引从0开始，对应Excel的第二行
+                            code = row[balance_code_column]
+                            name = row[balance_name_column]
+                            if pd.notna(code) and pd.notna(name):
+                                code_str = str(code).strip()
+                                name_str = str(name).strip()
+                                if code_str and name_str:
+                                    code_name_pairs.append((code_str, name_str))
+                                    code_to_name[code_str] = name_str
+                    
+                    print(f"余额表1中F列(科目名称)的顺序: {[name for _, name in code_name_pairs]}")
+                    
+                    # 严格按照余额表1中F列从上到下的顺序对科目编码进行排序
+                    sorted_codes = []
+                    remaining_codes = []
+                    
+                    # 先添加在余额表1中存在的科目编码（严格按照F列的顺序）
+                    for code, name in code_name_pairs:
+                        if code in [str(c).strip() for c in unique_codes]:
+                            sorted_codes.append(code)
+                    
+                    # 然后添加不在余额表1中的科目编码（保持原顺序）
+                    for code in unique_codes:
+                        code_str = str(code).strip()
+                        if code_str not in sorted_codes:
+                            remaining_codes.append(code)
+                    
+                    # 合并结果
+                    sorted_codes.extend(remaining_codes)
+                    
+                    print(f"已严格按照余额表1中F列(科目名称)的顺序对科目编码进行排序: {sorted_codes}")
+                elif balance_code_column:
+                    print(f"在余额表1中找到科目编码列: '{balance_code_column}'，但未找到科目名称列")
+                    # 获取余额表1中的科目编码列表（保持顺序）
+                    balance_codes = balance_sheet_df[balance_code_column].dropna().unique()
+                    balance_codes = [str(code).strip() for code in balance_codes]  # 转换为字符串并去除空格
+                    print(f"余额表1中的科目编码列表: {balance_codes}")
+                    
+                    # 创建排序字典
+                    code_order = {code: idx for idx, code in enumerate(balance_codes)}
+                    
+                    # 对unique_codes进行排序
+                    sorted_codes = []
+                    remaining_codes = []
+                    
+                    # 先添加在余额表1中存在的科目编码（按余额表1的顺序）
+                    for code in balance_codes:
+                        if code in [str(c).strip() for c in unique_codes]:
+                            sorted_codes.append(code)
+                    
+                    # 然后添加不在余额表1中的科目编码（保持原顺序）
+                    for code in unique_codes:
+                        code_str = str(code).strip()
+                        if code_str not in sorted_codes:
+                            remaining_codes.append(code)
+                    
+                    # 合并结果
+                    sorted_codes.extend(remaining_codes)
+                    
+                    print(f"已按照余额表1的顺序对科目编码进行排序: {sorted_codes}")
+                else:
+                    print("在余额表1中未找到科目编码列，使用默认顺序")
+            else:
+                print("文件中未找到余额表1工作表，使用默认顺序")
+        else:
+            print("test_file不存在，使用默认顺序")
+    except Exception as e:
+        print(f"读取余额表1时出错: {str(e)}，使用默认顺序")
+    
+    # 使用排序后的科目编码，并确保顺序严格按照余额表1中F列的顺序
+    unique_codes = sorted_codes
+    
+    # 保存创建的工作表名称列表，用于最终调整顺序
+    created_sheets = []
+    
     # 找到模板工作表
     original_sheet = None
     for s in workbook.sheetnames:
@@ -512,14 +674,41 @@ def process_journal_data(df_journal, workbook):
                     # 创建临时排序键
                     sub_df['_temp_sort_key'] = range(len(sub_df))
             
-            # 现在尝试筛选数据
-            if sub_df[debit_credit_column].isnull().all():
-                # E列没有内容，筛选L、M列各5个最大的
+            # 现在尝试筛选数据 - 优化版：根据科目代码对应的E列内容决定筛选规则
+            # 清理E列数据，去除空格
+            sub_df_clean = sub_df.copy()
+            if debit_credit_column in sub_df_clean.columns:
+                sub_df_clean[debit_credit_column] = sub_df_clean[debit_credit_column].fillna('').astype(str).str.strip()
+            
+            # 检查该科目代码下的E列内容
+            has_debit = False
+            has_credit = False
+            has_empty = False
+            
+            if debit_credit_column in sub_df_clean.columns:
+                # 获取非空的E列值
+                non_empty_ecol = sub_df_clean[sub_df_clean[debit_credit_column] != ''][debit_credit_column].unique()
+                
+                # 检查是否有'借'或'贷'的值
+                has_debit = any('借' in str(val) for val in non_empty_ecol)
+                has_credit = any('贷' in str(val) for val in non_empty_ecol)
+                has_empty = len(non_empty_ecol) == 0  # 如果非空值为空数组，则说明所有E列都没有内容
+            else:
+                has_empty = True  # 如果E列不存在，视为没有内容
+            
+            # 根据检查结果应用筛选规则
+            if has_empty:
+                # E列没有内容，筛选L、M列各5个最大的（共10条数据）
                 try:
+                    # 筛选L列（借方发生额）最大的5个
                     top_debit = sub_df.nlargest(5, debit_column)
+                    # 筛选M列（贷方发生额）最大的5个
                     top_credit = sub_df.nlargest(5, credit_column)
-                    result = pd.concat([top_debit, top_credit]).drop_duplicates()
-                    print(f"E列没有内容，筛选L、M列各5个最大值")
+                    # 合并结果，不删除重复行，确保总共有10条数据
+                    result = pd.concat([top_debit, top_credit])
+                    # 确保结果不超过10行
+                    result = result.head(10)
+                    print(f"科目代码 '{code_str}' - E列没有内容，筛选L列5个最大值和M列5个最大值，共{len(result)}条数据")
                 except Exception as e:
                     print(f"筛选L、M列出错: {str(e)}，使用临时排序键")
                     # 使用临时排序键作为备选
@@ -527,22 +716,22 @@ def process_journal_data(df_journal, workbook):
                         result = sub_df.nlargest(10, '_temp_sort_key')
                     else:
                         result = sub_df.head(10)
-            elif (sub_df[debit_credit_column] == '借').any():
+            elif has_debit and not has_credit:
                 # E列内容是'借'，筛选L列最大的10个
                 try:
                     result = sub_df.nlargest(10, debit_column)
-                    print(f"E列内容是'借'，筛选L列最大的10个值")
+                    print(f"科目代码 '{code_str}' - E列内容是'借'，筛选L列最大的10个值")
                 except Exception as e:
                     print(f"筛选L列出错: {str(e)}，使用临时排序键")
                     if '_temp_sort_key' in sub_df:
                         result = sub_df.nlargest(10, '_temp_sort_key')
                     else:
                         result = sub_df.head(10)
-            elif (sub_df[debit_credit_column] == '贷').any():
+            elif has_credit and not has_debit:
                 # E列内容是'贷'，筛选M列最大的10个
                 try:
                     result = sub_df.nlargest(10, credit_column)
-                    print(f"E列内容是'贷'，筛选M列最大的10个值")
+                    print(f"科目代码 '{code_str}' - E列内容是'贷'，筛选M列最大的10个值")
                 except Exception as e:
                     print(f"筛选M列出错: {str(e)}，使用临时排序键")
                     if '_temp_sort_key' in sub_df:
@@ -550,16 +739,45 @@ def process_journal_data(df_journal, workbook):
                     else:
                         result = sub_df.head(10)
             else:
-                # 默认情况，筛选L列最大的10个
+                # 如果同时有'借'和'贷'或其他情况，分别筛选并合并
                 try:
-                    result = sub_df.nlargest(10, debit_column)
-                    print(f"E列内容不是'借'或'贷'，默认筛选L列最大的10个值")
-                except Exception as e:
-                    print(f"默认筛选出错: {str(e)}，使用临时排序键")
-                    if '_temp_sort_key' in sub_df:
-                        result = sub_df.nlargest(10, '_temp_sort_key')
+                    # 对于'借'的记录，筛选L列最大的10个
+                    debit_rows = sub_df_clean[sub_df_clean[debit_credit_column].str.contains('借', na=False)]
+                    if not debit_rows.empty:
+                        top_debit = sub_df[sub_df.index.isin(debit_rows.index)].nlargest(10, debit_column)
                     else:
-                        result = sub_df.head(10)
+                        top_debit = pd.DataFrame()
+                    
+                    # 对于'贷'的记录，筛选M列最大的10个
+                    credit_rows = sub_df_clean[sub_df_clean[debit_credit_column].str.contains('贷', na=False)]
+                    if not credit_rows.empty:
+                        top_credit = sub_df[sub_df.index.isin(credit_rows.index)].nlargest(10, credit_column)
+                    else:
+                        top_credit = pd.DataFrame()
+                    
+                    # 合并结果
+                    result = pd.concat([top_debit, top_credit]).drop_duplicates()
+                    
+                    # 如果合并后为空或不足，从原始数据中补充
+                    if len(result) < 10:
+                        remaining = sub_df[~sub_df.index.isin(result.index)].head(10 - len(result))
+                        result = pd.concat([result, remaining])
+                    
+                    print(f"科目代码 '{code_str}' - E列同时有'借'和'贷'，分别筛选后合并")
+                except Exception as e:
+                    print(f"复杂筛选出错: {str(e)}，使用默认筛选")
+                    # 默认情况，筛选L列最大的10个
+                    try:
+                        result = sub_df.nlargest(10, debit_column)
+                        print(f"默认筛选L列最大的10个值")
+                    except:
+                        if '_temp_sort_key' in sub_df:
+                            result = sub_df.nlargest(10, '_temp_sort_key')
+                        else:
+                            result = sub_df.head(10)
+            
+            # 确保结果不超过10行，并保持唯一
+            result = result.head(10)
             
             # 如果结果为空，使用原始数据前10行
             if result.empty:
@@ -573,8 +791,15 @@ def process_journal_data(df_journal, workbook):
         if '_temp_sort_key' in result:
             result = result.drop('_temp_sort_key', axis=1)
         
-        # 创建新的工作表
-        sheet_name = get_valid_sheet_name(code_str, workbook)
+        # 创建新的工作表 - 使用科目名称作为工作表名称
+        sheet_name = code_str
+        # 如果有科目名称映射，使用科目名称
+        if code_str in code_to_name:
+            sheet_name = code_to_name[code_str]
+            print(f"使用科目名称 '{sheet_name}' 作为工作表名称")
+        
+        # 获取有效的工作表名称
+        sheet_name = get_valid_sheet_name(sheet_name, workbook)
         
         # 创建或覆盖工作表
         if sheet_name in workbook.sheetnames:
@@ -582,6 +807,9 @@ def process_journal_data(df_journal, workbook):
         
         # 创建新工作表
         new_sheet = workbook.create_sheet(sheet_name)
+        
+        # 记录创建的工作表名称
+        created_sheets.append(sheet_name)
         
         # 首先，如果有原始表格副本，完整复制其格式到新工作表
         if original_sheet:
@@ -665,7 +893,9 @@ def process_journal_data(df_journal, workbook):
         
         # 填充数据到新工作表（只填充数据，保留格式）
         fill_data(new_sheet, result, df_journal)
-
+    
+    # 返回创建的工作表列表
+    return created_sheets
 
 def get_valid_sheet_name(name, workbook, max_length=31):
     """获取有效的工作表名称"""
@@ -922,7 +1152,9 @@ def fill_data(sheet, data, df_journal):
     start_row = 5
     max_data_row = start_row  # 跟踪最大数据行
     
-    # 按日期倒序排序数据（如果有日期列）
+    print(f"开始填充数据到工作表 '{sheet.title}'，共{len(data)}行数据")
+    
+    # 按日期降序排序数据（如果有日期列）
     if hasattr(data, 'sort_values') and not data.empty:
         try:
             # 尝试按日期列排序（假设是第一列）
@@ -974,20 +1206,31 @@ def fill_data(sheet, data, df_journal):
                     date_str = row[date_col]
                     data.at[i, '_date_temp'] = parse_date_safely(date_str)
             
-            # 按临时日期列升序排序，对于无法转换为日期的行，使用原始顺序
-            data = data.sort_values(by=['_date_temp', '_sort_key'], ascending=[True, True])
+            # 按临时日期列降序排序，对于无法转换为日期的行，使用原始顺序（优化：显示最新日期在前）
+            data = data.sort_values(by=['_date_temp', '_sort_key'], ascending=[False, True])
             
             # 删除临时列
             data = data.drop(['_date_temp', '_sort_key'], axis=1)
-            print(f"已按日期升序排序数据")
+            print(f"已按日期降序排序数据（最新日期在前）")
         except Exception as e:
             print(f"排序数据时出错: {str(e)}")
             # 排序失败时，尝试按字符串排序作为备选
             try:
-                data = data.sort_values(by=data.columns[0], ascending=True)
-                print(f"已按字符串升序排序数据作为备选")
+                data = data.sort_values(by=data.columns[0], ascending=False)
+                print(f"已按字符串降序排序数据作为备选")
             except:
                 print(f"备选排序也失败")
+    
+    # 定义列映射关系（优化：使用更清晰的映射表）
+    column_mapping = {
+        'A': {'source_idx': 0, 'description': '日期', 'is_date': True},
+        'B': {'source_idx': 1, 'description': '凭证编号', 'is_date': False},
+        'C': {'source_idx': 9, 'description': '业务内容', 'is_date': False},
+        'D': {'source_idx': 6, 'description': '明细科目', 'is_date': False},
+        'E': {'source_idx': 8, 'description': '对方科目', 'is_date': False},
+        'F': {'source_idx': 11, 'description': '借方金额', 'is_date': False},
+        'G': {'source_idx': 12, 'description': '贷方金额', 'is_date': False}
+    }
     
     # 遍历数据行
     for idx, row in enumerate(data.itertuples(index=False)):
@@ -1021,38 +1264,44 @@ def fill_data(sheet, data, df_journal):
                         except Exception as e:
                             print(f"复制行格式时出错 (行 {current_row}, 列 {col_idx}): {str(e)}")
         
-        # 填写数据（规则1），同时保留单元格格式
-        # A列：日期（序时账A列）- 明确标记为日期列
-            if len(df_journal.columns) > 0:
-                date_value = row[0]
-                # 直接调用增强版的safe_set_cell_value函数处理所有日期类型
-                safe_set_cell_value(sheet.cell(row=current_row, column=1), date_value, 'yyyy-mm-dd', is_date_column=True)
-        
-        # B列：凭证编号（序时账B列）- 明确标记为非日期列
-            if len(df_journal.columns) > 1:
-                safe_set_cell_value(sheet.cell(row=current_row, column=2), row[1], None, is_date_column=False)
-        
-        # C列：业务内容（序时账J列，索引为9）- 明确标记为非日期列
-            if len(df_journal.columns) > 9:
-                safe_set_cell_value(sheet.cell(row=current_row, column=3), row[9], None, is_date_column=False)
-        
-        # D列：明细科目（序时账G列，索引为6）- 明确标记为非日期列
-            if len(df_journal.columns) > 6:
-                safe_set_cell_value(sheet.cell(row=current_row, column=4), row[6], None, is_date_column=False)
-        
-        # E列：对方科目（序时账I列，索引为8）- 明确标记为非日期列
-            if len(df_journal.columns) > 8:
-                safe_set_cell_value(sheet.cell(row=current_row, column=5), row[8], None, is_date_column=False)
-        
-        # F列：借方金额（序时账L列，索引为11）- 明确标记为非日期列
-            if len(df_journal.columns) > 11:
-                safe_set_cell_value(sheet.cell(row=current_row, column=6), row[11], None, is_date_column=False)
-        
-        # G列：贷方金额（序时账M列，索引为12）- 明确标记为非日期列
-            if len(df_journal.columns) > 12:
-                safe_set_cell_value(sheet.cell(row=current_row, column=7), row[12], None, is_date_column=False)
+        # 填写数据（优化：使用列映射表，使代码更清晰和易于维护）
+            for col_letter, col_info in column_mapping.items():
+                source_idx = col_info['source_idx']
+                description = col_info['description']
+                is_date = col_info['is_date']
+                
+                # 计算目标列索引（A=1, B=2, ...）
+                target_col = ord(col_letter) - ord('A') + 1
+                
+                # 检查数据源是否足够长
+                if len(row) > source_idx:
+                    try:
+                        cell_value = row[source_idx]
+                        # 处理金额列的特殊格式
+                        if description in ['借方金额', '贷方金额']:
+                            # 确保金额是数值类型
+                            if isinstance(cell_value, str):
+                                # 清理金额字符串
+                                cell_value = cell_value.replace(',', '').replace('¥', '').strip()
+                                # 尝试转换为浮点数
+                                try:
+                                    cell_value = float(cell_value)
+                                except ValueError:
+                                    cell_value = 0  # 转换失败时设置为0
+                        
+                        # 调用安全的单元格值设置函数
+                        safe_set_cell_value(
+                            sheet.cell(row=current_row, column=target_col), 
+                            cell_value, 
+                            'yyyy-mm-dd' if is_date else None, 
+                            is_date_column=is_date
+                        )
+                    except Exception as e:
+                        print(f"填充{description}列时出错: {str(e)}")
         except Exception as e:
             print(f"填充数据行 {idx+1} 时出错: {str(e)}")
+            # 添加更详细的错误信息以便调试
+            print(f"当前行: {current_row}, 数据行长度: {len(row) if hasattr(row, '__len__') else '未知'}")
     
     # 添加表格框线，并确保包含备注列（O列，即第15列）
     if max_data_row >= start_row:
@@ -1088,6 +1337,8 @@ def fill_data(sheet, data, df_journal):
             print("当前库版本可能不支持直接设置列宽")
     except Exception as e:
         print(f"设置日期列宽时出错: {str(e)}")
+        
+    print(f"数据填充完成，工作表 '{sheet.title}' 共填充{max_data_row - start_row + 1}行数据")
 
     # 合并单元格并设置文字居中
     try:
@@ -1537,16 +1788,18 @@ def test_copy_table():
                 print("文件中未找到'序时账'工作表")
                 return
             
-            # 调用process_journal_data函数处理序时账数据
-            process_journal_data(df_journal, wb_output)
+            # 调用process_journal_data函数处理序时账数据并获取创建的工作表列表
+            created_sheets = process_journal_data(df_journal, wb_output, test_file)
             
             # 删除原始表格副本工作表
             remove_original_copy_sheet(wb_output)
             
+            # 保持原始工作表顺序，不进行特殊排序
+            print("保持原始工作表顺序")
+        
             # 保存输出文件
             wb_output.save(output_file)
             print(f"处理完成，结果已保存到: {output_file}")
-        
         else:
             # 处理.xlsx文件
             # 加载原始文件
@@ -1637,11 +1890,14 @@ def test_copy_table():
                 print("文件中未找到'序时账'工作表")
                 return
             
-            # 调用process_journal_data函数处理序时账数据
-            process_journal_data(df_journal, wb_output)
+            # 调用process_journal_data函数处理序时账数据并获取创建的工作表列表
+            created_sheets = process_journal_data(df_journal, wb_output)
             
             # 删除原始表格副本工作表
             remove_original_copy_sheet(wb_output)
+            
+            # 保持原始工作表顺序，不进行特殊排序
+            print("保持原始工作表顺序")
             
             # 保存输出文件
             wb_output.save(output_file)
