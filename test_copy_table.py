@@ -9,6 +9,64 @@ from openpyxl.styles import Border, Side, PatternFill, Font, Alignment
 import copy
 from datetime import datetime
 
+def get_account_sorting_from_file(test_file):
+    """从测试文件的余额表1工作表中获取科目名称排序"""
+    sorted_names = []
+    file_ext = os.path.splitext(test_file)[1].lower()
+    
+    try:
+        if file_ext == '.xls':
+            # 处理.xls文件
+            import xlrd
+            book = xlrd.open_workbook(test_file)
+            if "余额表1" in book.sheet_names():
+                balance_sheet = book.sheet_by_name("余额表1")
+                # 假设科目名称在F列（第6列）
+                # 先查找表头行
+                header_row = -1
+                for i in range(min(20, balance_sheet.nrows)):  # 查找前20行
+                    cell_value = balance_sheet.cell_value(i, 5)  # F列
+                    if cell_value and ("科目名称" in str(cell_value) or "科目" in str(cell_value)):
+                        header_row = i
+                        break
+                
+                # 从表头行之后开始读取科目名称
+                if header_row >= 0:
+                    for i in range(header_row + 1, balance_sheet.nrows):
+                        cell_value = balance_sheet.cell_value(i, 5)  # F列
+                        if cell_value and isinstance(cell_value, str) and cell_value.strip():
+                            sorted_names.append(cell_value.strip())
+        else:
+            # 处理.xlsx文件
+            try:
+                wb = openpyxl.load_workbook(test_file, read_only=True)
+                if "余额表1" in wb.sheetnames:
+                    balance_sheet = wb["余额表1"]
+                    # 查找表头行
+                    header_row = -1
+                    for i, row in enumerate(balance_sheet.iter_rows(min_row=1, max_row=20, min_col=6, max_col=6)):
+                        cell_value = row[0].value
+                        if cell_value and ("科目名称" in str(cell_value) or "科目" in str(cell_value)):
+                            header_row = i
+                            break
+                    
+                    # 从表头行之后开始读取科目名称
+                    if header_row >= 0:
+                        for row in balance_sheet.iter_rows(min_row=header_row + 2, max_col=6, min_col=6):
+                            cell_value = row[0].value
+                            if cell_value and isinstance(cell_value, str) and cell_value.strip():
+                                sorted_names.append(cell_value.strip())
+            except Exception as e:
+                print(f"读取.xlsx文件时出错: {str(e)}")
+    except Exception as e:
+        print(f"获取科目排序时出错: {str(e)}")
+    
+    print(f"从余额表1获取的科目名称数量: {len(sorted_names)}")
+    if sorted_names:
+        print(f"前10个科目名称: {sorted_names[:10]}")
+    
+    return sorted_names
+
 # 测试复制表格功能
 def test_copy_table():
     # 让用户选择要处理的Excel文件
@@ -513,32 +571,75 @@ def process_journal_data(df_journal, workbook, test_file=None):
                 print(f"成功读取余额表1，共{len(balance_sheet_df)}行数据")
                 print(f"余额表1列名: {list(balance_sheet_df.columns)}")
                 
-                # 尝试找到科目编码列和科目名称列
+                # 尝试找到科目编码列、科目名称列、借方条数列和贷方条数列
                 code_columns = ['科目编码', '科目代码', '代码', '编码']
                 name_columns = ['科目名称', '科目', '名称']
+                debit_count_columns = ['借方条数', '借方数', '借方发生条数']
+                credit_count_columns = ['贷方条数', '贷方数', '贷方发生条数']
                 
                 balance_code_column = None
                 balance_name_column = None
+                balance_debit_count_column = None
+                balance_credit_count_column = None
                 
-                # 查找科目编码列
+                # 直接查找明确的列名
+                balance_code_column = None
+                balance_name_column = None
+                balance_debit_count_column = None
+                balance_credit_count_column = None
+                
+                # 遍历列名，尝试找到精确匹配的列
                 for col in balance_sheet_df.columns:
-                    if any(keyword in col for keyword in code_columns):
+                    col_str = str(col)
+                    if col_str == '科目编码':
                         balance_code_column = col
-                        break
-                
-                # 查找科目名称列
-                for col in balance_sheet_df.columns:
-                    if any(keyword in col for keyword in name_columns):
+                    elif col_str == '科目名称':
                         balance_name_column = col
-                        break
+                    elif col_str == '借方条数':
+                        balance_debit_count_column = col
+                    elif col_str == '贷方条数':
+                        balance_credit_count_column = col
+                
+                # 如果没有找到精确匹配，尝试使用关键词匹配
+                if not balance_code_column:
+                    for col in balance_sheet_df.columns:
+                        if any(keyword in str(col) for keyword in code_columns):
+                            balance_code_column = col
+                            break
+                
+                if not balance_name_column:
+                    for col in balance_sheet_df.columns:
+                        if col != balance_code_column and any(keyword in str(col) for keyword in name_columns):
+                            balance_name_column = col
+                            break
+                
+                if not balance_debit_count_column:
+                    for col in balance_sheet_df.columns:
+                        if any(keyword in str(col) for keyword in debit_count_columns):
+                            balance_debit_count_column = col
+                            break
+                
+                if not balance_credit_count_column:
+                    for col in balance_sheet_df.columns:
+                        if any(keyword in str(col) for keyword in credit_count_columns):
+                            balance_credit_count_column = col
+                            break
                 
                 # 如果同时找到科目编码列和科目名称列
                 if balance_code_column and balance_name_column:
                     print(f"在余额表1中找到科目编码列: '{balance_code_column}'")
                     print(f"在余额表1中找到科目名称列: '{balance_name_column}'")
+                    if balance_debit_count_column:
+                        print(f"在余额表1中找到借方条数列: '{balance_debit_count_column}'")
+                    if balance_credit_count_column:
+                        print(f"在余额表1中找到贷方条数列: '{balance_credit_count_column}'")
                     
                     # 获取余额表1中的科目编码和名称映射（严格按照F列从上到下的顺序，从F2开始）
                     code_name_pairs = []
+                    # 存储科目编码和借/贷条数的映射
+                    code_to_debit_count = {}
+                    code_to_credit_count = {}
+                    
                     for idx, row in balance_sheet_df.iterrows():
                         # 从第二行开始（F2对应DataFrame的索引1）
                         if idx >= 0:  # DataFrame索引从0开始，对应Excel的第二行
@@ -550,6 +651,42 @@ def process_journal_data(df_journal, workbook, test_file=None):
                                 if code_str and name_str:
                                     code_name_pairs.append((code_str, name_str))
                                     code_to_name[code_str] = name_str
+                                    
+                                    # 存储借方条数
+                                    if balance_debit_count_column and pd.notna(row[balance_debit_count_column]):
+                                        try:
+                                            debit_count = int(float(str(row[balance_debit_count_column]).strip()))
+                                            code_to_debit_count[code_str] = max(1, debit_count)  # 确保至少为1
+                                        except:
+                                            pass
+                                    
+                                    # 存储贷方条数
+                                    if balance_credit_count_column and pd.notna(row[balance_credit_count_column]):
+                                        try:
+                                            credit_count = int(float(str(row[balance_credit_count_column]).strip()))
+                                            code_to_credit_count[code_str] = max(1, credit_count)  # 确保至少为1
+                                        except:
+                                            pass
+                    
+                    # 将借/贷条数映射设置为全局变量，以便在筛选逻辑中使用
+                    global code_to_debit_count_global, code_to_credit_count_global, name_to_code_global
+                    code_to_debit_count_global = code_to_debit_count
+                    code_to_credit_count_global = code_to_credit_count
+                    # 创建科目名称到代码的映射，用于筛选逻辑中查找对应的借/贷条数
+                    name_to_code_global = {name_str: code_str for code_str, name_str in code_name_pairs}
+                    
+                    # 打印借/贷条数映射信息
+                    print(f"成功设置全局借/贷条数映射")
+                    print(f"找到的借方条数记录数: {len(code_to_debit_count_global)}")
+                    print(f"找到的贷方条数记录数: {len(code_to_credit_count_global)}")
+                    print(f"找到的科目名称到代码映射记录数: {len(name_to_code_global)}")
+                    # 打印前5条记录作为示例
+                    if code_to_debit_count_global:
+                        print(f"借方条数示例: {list(code_to_debit_count_global.items())[:5]}")
+                    if code_to_credit_count_global:
+                        print(f"贷方条数示例: {list(code_to_credit_count_global.items())[:5]}")
+                    if name_to_code_global:
+                        print(f"科目名称到代码映射示例: {list(name_to_code_global.items())[:5]}")
                     
                     print(f"余额表1中F列(科目名称)的顺序: {[name for _, name in code_name_pairs]}")
                     
@@ -706,62 +843,87 @@ def process_journal_data(df_journal, workbook, test_file=None):
             else:
                 has_empty = True  # 如果E列不存在，视为没有内容
             
+            # 尝试获取借/贷条数，如果不存在则使用默认值
+            debit_count = 10
+            credit_count = 10
+            
+            # 尝试从全局变量中获取借/贷条数映射
+            # 首先尝试直接通过科目名称查找
+            if 'name_to_code_global' in globals() and code_str in globals()['name_to_code_global']:
+                # 如果科目名称在映射中，获取对应的科目代码
+                mapped_code = globals()['name_to_code_global'][code_str]
+                # 使用映射的代码查找借/贷条数
+                if 'code_to_debit_count_global' in globals() and mapped_code in globals()['code_to_debit_count_global']:
+                    debit_count = globals()['code_to_debit_count_global'][mapped_code]
+                if 'code_to_credit_count_global' in globals() and mapped_code in globals()['code_to_credit_count_global']:
+                    credit_count = globals()['code_to_credit_count_global'][mapped_code]
+            # 如果科目名称不在映射中，尝试直接通过科目代码查找
+            elif 'code_to_debit_count_global' in globals() and code_str in globals()['code_to_debit_count_global']:
+                debit_count = globals()['code_to_debit_count_global'][code_str]
+                if 'code_to_credit_count_global' in globals() and code_str in globals()['code_to_credit_count_global']:
+                    credit_count = globals()['code_to_credit_count_global'][code_str]
+            
+            # 确保条数至少为1
+            debit_count = max(1, debit_count)
+            credit_count = max(1, credit_count)
+            
+            # 打印调试信息，显示当前使用的筛选条数
+            print(f"科目代码 '{code_str}' - 使用的筛选条数: 借方={debit_count}, 贷方={credit_count}")
+            
             # 根据检查结果应用筛选规则
             if has_empty:
-                # E列没有内容，筛选L、M列各5个最大的（共10条数据）
+                # E列没有内容，使用余额表1中对应科目的借/贷条数筛选L、M列
                 try:
-                    # 筛选L列（借方发生额）最大的5个
-                    top_debit = sub_df.nlargest(5, debit_column)
-                    # 筛选M列（贷方发生额）最大的5个
-                    top_credit = sub_df.nlargest(5, credit_column)
-                    # 合并结果，不删除重复行，确保总共有10条数据
+                    # 筛选L列（借方发生额）最大的debit_count个
+                    top_debit = sub_df.nlargest(debit_count, debit_column)
+                    # 筛选M列（贷方发生额）最大的credit_count个
+                    top_credit = sub_df.nlargest(credit_count, credit_column)
+                    # 合并结果，不删除重复行
                     result = pd.concat([top_debit, top_credit])
-                    # 确保结果不超过10行
-                    result = result.head(10)
-                    print(f"科目代码 '{code_str}' - E列没有内容，筛选L列5个最大值和M列5个最大值，共{len(result)}条数据")
+                    print(f"科目代码 '{code_str}' - E列没有内容，使用余额表1中的借/贷条数筛选L列{debit_count}个和M列{credit_count}个最大值")
                 except Exception as e:
                     print(f"筛选L、M列出错: {str(e)}，使用临时排序键")
                     # 使用临时排序键作为备选
                     if '_temp_sort_key' in sub_df:
-                        result = sub_df.nlargest(10, '_temp_sort_key')
+                        result = sub_df.nlargest(max(debit_count, credit_count), '_temp_sort_key')
                     else:
-                        result = sub_df.head(10)
+                        result = sub_df.head(max(debit_count, credit_count))
             elif has_debit and not has_credit:
-                # E列内容是'借'，筛选L列最大的10个
+                # E列内容是'借'，使用余额表1中对应科目的借方条数筛选L列
                 try:
-                    result = sub_df.nlargest(10, debit_column)
-                    print(f"科目代码 '{code_str}' - E列内容是'借'，筛选L列最大的10个值")
+                    result = sub_df.nlargest(debit_count, debit_column)
+                    print(f"科目代码 '{code_str}' - E列内容是'借'，使用余额表1中的借方条数({debit_count})筛选L列最大值")
                 except Exception as e:
                     print(f"筛选L列出错: {str(e)}，使用临时排序键")
                     if '_temp_sort_key' in sub_df:
-                        result = sub_df.nlargest(10, '_temp_sort_key')
+                        result = sub_df.nlargest(debit_count, '_temp_sort_key')
                     else:
-                        result = sub_df.head(10)
+                        result = sub_df.head(debit_count)
             elif has_credit and not has_debit:
-                # E列内容是'贷'，筛选M列最大的10个
+                # E列内容是'贷'，使用余额表1中对应科目的贷方条数筛选M列
                 try:
-                    result = sub_df.nlargest(10, credit_column)
-                    print(f"科目代码 '{code_str}' - E列内容是'贷'，筛选M列最大的10个值")
+                    result = sub_df.nlargest(credit_count, credit_column)
+                    print(f"科目代码 '{code_str}' - E列内容是'贷'，使用余额表1中的贷方条数({credit_count})筛选M列最大值")
                 except Exception as e:
                     print(f"筛选M列出错: {str(e)}，使用临时排序键")
                     if '_temp_sort_key' in sub_df:
-                        result = sub_df.nlargest(10, '_temp_sort_key')
+                        result = sub_df.nlargest(credit_count, '_temp_sort_key')
                     else:
-                        result = sub_df.head(10)
+                        result = sub_df.head(credit_count)
             else:
                 # 如果同时有'借'和'贷'或其他情况，分别筛选并合并
                 try:
-                    # 对于'借'的记录，筛选L列最大的10个
+                    # 对于'借'的记录，使用余额表1中对应科目的借方条数筛选L列
                     debit_rows = sub_df_clean[sub_df_clean[debit_credit_column].str.contains('借', na=False)]
                     if not debit_rows.empty:
-                        top_debit = sub_df[sub_df.index.isin(debit_rows.index)].nlargest(10, debit_column)
+                        top_debit = sub_df[sub_df.index.isin(debit_rows.index)].nlargest(debit_count, debit_column)
                     else:
                         top_debit = pd.DataFrame()
                     
-                    # 对于'贷'的记录，筛选M列最大的10个
+                    # 对于'贷'的记录，使用余额表1中对应科目的贷方条数筛选M列
                     credit_rows = sub_df_clean[sub_df_clean[debit_credit_column].str.contains('贷', na=False)]
                     if not credit_rows.empty:
-                        top_credit = sub_df[sub_df.index.isin(credit_rows.index)].nlargest(10, credit_column)
+                        top_credit = sub_df[sub_df.index.isin(credit_rows.index)].nlargest(credit_count, credit_column)
                     else:
                         top_credit = pd.DataFrame()
                     
@@ -769,22 +931,23 @@ def process_journal_data(df_journal, workbook, test_file=None):
                     result = pd.concat([top_debit, top_credit]).drop_duplicates()
                     
                     # 如果合并后为空或不足，从原始数据中补充
-                    if len(result) < 10:
-                        remaining = sub_df[~sub_df.index.isin(result.index)].head(10 - len(result))
+                    max_rows = max(debit_count, credit_count)
+                    if len(result) < max_rows:
+                        remaining = sub_df[~sub_df.index.isin(result.index)].head(max_rows - len(result))
                         result = pd.concat([result, remaining])
                     
-                    print(f"科目代码 '{code_str}' - E列同时有'借'和'贷'，分别筛选后合并")
+                    print(f"科目代码 '{code_str}' - E列同时有'借'和'贷'，分别使用动态条数筛选后合并")
                 except Exception as e:
                     print(f"复杂筛选出错: {str(e)}，使用默认筛选")
-                    # 默认情况，筛选L列最大的10个
+                    # 默认情况，使用借方条数筛选L列
                     try:
-                        result = sub_df.nlargest(10, debit_column)
-                        print(f"默认筛选L列最大的10个值")
+                        result = sub_df.nlargest(debit_count, debit_column)
+                        print(f"默认使用借方条数({debit_count})筛选L列最大值")
                     except:
                         if '_temp_sort_key' in sub_df:
-                            result = sub_df.nlargest(10, '_temp_sort_key')
+                            result = sub_df.nlargest(debit_count, '_temp_sort_key')
                         else:
-                            result = sub_df.head(10)
+                            result = sub_df.head(debit_count)
             
             # 确保结果不超过10行，并保持唯一
             result = result.head(10)
@@ -1219,18 +1382,20 @@ def fill_data(sheet, data, df_journal):
                     date_str = row[date_col]
                     data.at[i, '_date_temp'] = parse_date_safely(date_str)
             
-            # 按临时日期列降序排序，对于无法转换为日期的行，使用原始顺序（优化：显示最新日期在前）
-            data = data.sort_values(by=['_date_temp', '_sort_key'], ascending=[False, True])
+            # 按临时日期列升序排序，日期相同时按凭证编号升序排序，对于无法转换为日期的行，使用原始顺序
+            # 凭证编号在第1列（索引为1）
+            data = data.sort_values(by=['_date_temp', data.columns[1], '_sort_key'], ascending=[True, True, True])
             
             # 删除临时列
             data = data.drop(['_date_temp', '_sort_key'], axis=1)
-            print(f"已按日期降序排序数据（最新日期在前）")
+            print(f"已按日期升序排序数据，日期相同时按凭证编号升序排序")
         except Exception as e:
             print(f"排序数据时出错: {str(e)}")
             # 排序失败时，尝试按字符串排序作为备选
             try:
-                data = data.sort_values(by=data.columns[0], ascending=False)
-                print(f"已按字符串降序排序数据作为备选")
+                # 先按日期列升序，再按凭证编号列升序
+                data = data.sort_values(by=[data.columns[0], data.columns[1]], ascending=[True, True])
+                print(f"已按字符串升序排序数据作为备选（先日期后凭证编号）")
             except:
                 print(f"备选排序也失败")
     
@@ -1807,7 +1972,7 @@ def test_copy_table():
             # 删除原始表格副本工作表
             remove_original_copy_sheet(wb_output)
             
-            # 按照余额表1的F列科目名称顺序排序调整工作表顺序
+            # 按照科目编码从小到大排序调整工作表顺序
             try:
                 # 创建一个排序后的工作表名称列表
                 sorted_sheets = []
@@ -1816,34 +1981,60 @@ def test_copy_table():
                     if sheet_name not in created_sheets:
                         sorted_sheets.append(sheet_name)
                 
-                # 然后添加按余额表1科目名称排序的新工作表
-                from check_balance_sheet import get_account_sorting
-                sorted_names = get_account_sorting()
+                # 按科目编码数值排序
+                # 从余额表1获取科目名称排序
+                balance_sheet_accounts = get_account_sorting_from_file(test_file)
                 
-                # 创建工作表名称到余额表位置的映射
-                sheet_to_balance_position = {}
-                for code, sheet_name in code_sheet_mapping:
-                    # 查找工作表名称在余额表1中的位置
-                    found = False
-                    for i, balance_name in enumerate(sorted_names):
-                        if balance_name in sheet_name or sheet_name in balance_name:
-                            sheet_to_balance_position[sheet_name] = i
-                            found = True
-                            break
-                    if not found:
-                        sheet_to_balance_position[sheet_name] = float('inf')
-                
-                # 按照余额表1的顺序排序工作表
-                sorted_sheets_by_balance = sorted(code_sheet_mapping, key=lambda x: sheet_to_balance_position.get(x[1], float('inf')))
-                
-                # 添加排序后的工作表名称
-                for code, sheet_name in sorted_sheets_by_balance:
+                if balance_sheet_accounts:
+                    # 如果成功获取到余额表1的科目名称，按照余额表顺序排序
+                    # 创建科目名称到位置的映射字典
+                    account_positions = {account: i for i, account in enumerate(balance_sheet_accounts)}
+                    
+                    # 按余额表顺序排序新工作表
+                    # 先找出在余额表中存在的科目
+                    matched_sheets = []
+                    unmatched_sheets = []
+                    
+                    # 创建工作表名称到科目编码的映射
+                    sheet_to_code = {sheet_name: code for code, sheet_name in code_sheet_mapping}
+                    
+                    # 遍历新创建的工作表
+                    for code, sheet_name in code_sheet_mapping:
+                        # 尝试从工作表名称中提取科目名称（假设格式为"科目编码 科目名称"）
+                        parts = sheet_name.split(' ', 1)
+                        account_name = parts[1].strip() if len(parts) > 1 else sheet_name.strip()
+                        
+                        # 查找是否在余额表中存在
+                        found = False
+                        for balance_account in balance_sheet_accounts:
+                            if account_name == balance_account or balance_account in account_name:
+                                matched_sheets.append((balance_account, code, sheet_name))
+                                found = True
+                                break
+                        
+                        if not found:
+                            unmatched_sheets.append((code, sheet_name))
+                    
+                    # 按余额表顺序排序已匹配的工作表
+                    matched_sheets.sort(key=lambda x: account_positions[x[0]])
+                    
+                    # 按科目编码排序未匹配的工作表
+                    unmatched_sheets.sort(key=lambda x: float(x[0].strip()) if x[0].strip().replace('.', '', 1).isdigit() else x[0].strip())
+                    
+                    # 合并已匹配和未匹配的工作表
+                    sorted_code_sheets = [(code, sheet_name) for _, code, sheet_name in matched_sheets] + unmatched_sheets
+                    print("新增的工作表已按余额表1顺序排序")
+                else:
+                    # 如果未找到余额表1或获取失败，退回到按科目编码数值排序
+                    sorted_code_sheets = sorted(code_sheet_mapping, key=lambda x: float(x[0].strip()) if x[0].strip().replace('.', '', 1).isdigit() else x[0].strip())
+                    print("未找到余额表1或获取科目名称失败，已按科目编码顺序排序")
+                    
+                for code, sheet_name in sorted_code_sheets:
                     sorted_sheets.append(sheet_name)
                 
                 # 调整工作簿中的工作表顺序
                 if hasattr(wb_output, '_sheets'):
                     wb_output._sheets = [wb_output[sheet] for sheet in sorted_sheets]
-                print("新增的工作表已按余额表1科目名称顺序排序")
                 print(f"排序后的工作表顺序: {sorted_sheets}")
             except Exception as e:
                 print(f"调整工作表顺序时出错: {str(e)}")
@@ -1956,63 +2147,60 @@ def test_copy_table():
                     if sheet_name not in created_sheets:
                         sorted_sheets.append(sheet_name)
                 
-                # 然后添加按科目编码排序的新工作表
-                # 先按科目编码排序code_sheet_mapping - 这里使用从余额表1获取的顺序
-                # 创建科目编码到工作表名称的映射字典
-                code_to_sheet = {code: sheet_name for code, sheet_name in code_sheet_mapping}
+                # 按科目编码数值排序
+                # 从余额表1获取科目名称排序
+                balance_sheet_accounts = get_account_sorting_from_file(test_file)
                 
-                # 从余额表1获取科目名称顺序
-                try:
-                    # 调用get_account_sorting函数获取科目名称排序
-                    from check_balance_sheet import get_account_sorting
-                    sorted_names = get_account_sorting()
-                    print(f"从余额表1获取的科目名称顺序（前10个）: {sorted_names[:10]}")
+                if balance_sheet_accounts:
+                    # 如果成功获取到余额表1的科目名称，按照余额表顺序排序
+                    # 创建科目名称到位置的映射字典
+                    account_positions = {account: i for i, account in enumerate(balance_sheet_accounts)}
                     
-                    # 创建工作表名称到余额表位置的映射
-                    sheet_to_balance_position = {}
+                    # 按余额表顺序排序新工作表
+                    # 先找出在余额表中存在的科目
+                    matched_sheets = []
+                    unmatched_sheets = []
                     
-                    # 遍历所有工作表名称，尝试找到对应的余额表科目名称
+                    # 创建工作表名称到科目编码的映射
+                    sheet_to_code = {sheet_name: code for code, sheet_name in code_sheet_mapping}
+                    
+                    # 遍历新创建的工作表
                     for code, sheet_name in code_sheet_mapping:
-                        # 查找工作表名称在余额表1中的位置
-                        for i, balance_name in enumerate(sorted_names):
-                            if balance_name in sheet_name or sheet_name in balance_name:
-                                sheet_to_balance_position[sheet_name] = i
+                        # 尝试从工作表名称中提取科目名称（假设格式为"科目编码 科目名称"）
+                        parts = sheet_name.split(' ', 1)
+                        account_name = parts[1].strip() if len(parts) > 1 else sheet_name.strip()
+                        
+                        # 查找是否在余额表中存在
+                        found = False
+                        for balance_account in balance_sheet_accounts:
+                            if account_name == balance_account or balance_account in account_name:
+                                matched_sheets.append((balance_account, code, sheet_name))
+                                found = True
                                 break
-                        # 如果没有找到匹配，使用一个大值表示排在后面
-                        if sheet_name not in sheet_to_balance_position:
-                            sheet_to_balance_position[sheet_name] = float('inf')
+                        
+                        if not found:
+                            unmatched_sheets.append((code, sheet_name))
                     
-                    # 打印匹配结果
-                    print("\n工作表名称与余额表位置的匹配结果:")
-                    for sheet_name, position in sheet_to_balance_position.items():
-                        matched_name = None
-                        if position < float('inf'):
-                            matched_name = sorted_names[position]
-                        print(f"{sheet_name}: 余额表位置 = {position}, 匹配的科目名称 = {matched_name if matched_name else '未匹配'}")
+                    # 按余额表顺序排序已匹配的工作表
+                    matched_sheets.sort(key=lambda x: account_positions[x[0]])
                     
-                    # 按照余额表1的顺序排序工作表
-                    sorted_sheets_by_balance = sorted(code_sheet_mapping, key=lambda x: sheet_to_balance_position.get(x[1], float('inf')))
+                    # 按科目编码排序未匹配的工作表
+                    unmatched_sheets.sort(key=lambda x: float(x[0].strip()) if x[0].strip().replace('.', '', 1).isdigit() else x[0].strip())
                     
-                    # 将排序后的工作表名称添加到结果列表中
-                    for code, sheet_name in sorted_sheets_by_balance:
-                        sorted_sheets.append(sheet_name)
-                    
-                    # 打印最终排序结果
-                    print("\n最终排序后的工作表顺序:")
-                    for i, sheet_name in enumerate(sorted_sheets, 1):
-                        print(f"{i}. {sheet_name}")
-                    
-                except Exception as e:
-                    print(f"获取余额表排序信息时出错: {str(e)}")
-                    # 退回到按科目编码数值排序
+                    # 合并已匹配和未匹配的工作表
+                    sorted_code_sheets = [(code, sheet_name) for _, code, sheet_name in matched_sheets] + unmatched_sheets
+                    print("新增的工作表已按余额表1顺序排序")
+                else:
+                    # 如果未找到余额表1或获取失败，退回到按科目编码数值排序
                     sorted_code_sheets = sorted(code_sheet_mapping, key=lambda x: float(x[0].strip()) if x[0].strip().replace('.', '', 1).isdigit() else x[0].strip())
-                    for code, sheet_name in sorted_code_sheets:
-                        sorted_sheets.append(sheet_name)
+                    print("未找到余额表1或获取科目名称失败，已按科目编码顺序排序")
+                    
+                for code, sheet_name in sorted_code_sheets:
+                    sorted_sheets.append(sheet_name)
                 
                 # 调整工作簿中的工作表顺序
                 if hasattr(wb_output, '_sheets'):
                     wb_output._sheets = [wb_output[sheet] for sheet in sorted_sheets]
-                print("新增的工作表已按余额表科目顺序排序")
                 print(f"排序后的工作表顺序: {sorted_sheets}")
             except Exception as e:
                 print(f"调整工作表顺序时出错: {str(e)}")
