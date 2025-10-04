@@ -1648,6 +1648,37 @@ def fill_data(sheet, data, df_journal):
         for row_idx in range(10, 11):  # 第10行
             for col_idx in range(8, 16):  # H到O列
                 sheet.cell(row=row_idx, column=col_idx).value = ""  # 强制清空单元格
+                
+        # 专门检查并清空F10和G10单元格，如果值为'借方/贷方'
+        for col_idx in [6, 7]:  # F列和G列
+            cell_value = sheet.cell(row=10, column=col_idx).value
+            if cell_value and str(cell_value).strip() in ['借方/贷方', '借方', '贷方']:
+                sheet.cell(row=10, column=col_idx).value = ""  # 清空单元格
+                print(f"已清空单元格 F10-G10 中值为'{cell_value}'的内容")
+                
+        # 检查A9-G9单元格是否包含标题信息（如"日期"、"凭证编号"、"业务内容"等），如果是则清空这些单元格
+        # 定义标题关键词列表
+        title_keywords = ['日期', '凭证编号', '业务内容', '明细科目', '对方科目', '金额', '借方', '贷方']
+        
+        # 检查A9-G9区域是否包含标题信息
+        contains_title_info = False
+        for col_idx in range(1, 8):  # A列到G列
+            cell_value = sheet.cell(row=9, column=col_idx).value
+            if cell_value:
+                cell_text = str(cell_value).strip()
+                # 检查单元格文本是否包含任何标题关键词
+                for keyword in title_keywords:
+                    if keyword in cell_text:
+                        contains_title_info = True
+                        break
+                if contains_title_info:
+                    break
+        
+        # 如果A9-G9包含标题信息，则清空这些单元格
+        if contains_title_info:
+            for col_idx in range(1, 8):  # A列到G列
+                sheet.cell(row=9, column=col_idx).value = ""  # 清空单元格
+            print("已清空A9-G9单元格中包含标题信息的内容")
         
         # 2. 处理数据较少时可能出现的其他红色框框位置（比如第7-11行区域）
         # 检查第7行是否有标题行
